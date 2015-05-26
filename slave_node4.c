@@ -316,11 +316,11 @@ void main()
 			if (save_index>=1) {
 				ppm_estimate = (clockoffset_save[save_index]-clockoffset_save[save_index-1])*61.03515625; //
 			}
-//			else
-//				ppm_estimate = 6.176; // xxx temporary
+			else
+				ppm_estimate = 6.176; // xxx temporary
 
 			ppm_estimate_save[save_index] = ppm_estimate;
-			ppm_estimate = 6.176; // xxx temporary
+			//ppm_estimate = 6.176; // xxx temporary
 
 			// update save index
 			save_index++;

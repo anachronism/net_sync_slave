@@ -310,7 +310,9 @@ void main()
 			}
 
 			ppm_estimate_save[save_index] = ppm_estimate;
-			ppm_estimate = 6.124; // xxx temporary //d
+
+			ppm_estimate = 6.124; // xxx temporary
+
 
 			// update save index
 			save_index++;

@@ -51,6 +51,12 @@
 #define PI 3.14159265358979323846
 #define INVPI 0.318309886183791
 
+#define STATE_WARMUP -1
+#define STATE_SEARCH 0
+#define STATE_RECORD 1
+#define STATE_ESTIMATE 2
+#define STATE_BUFFER 3
+
 #include <stdio.h>
 #include <c6x.h>
 #include <csl.h>
@@ -246,9 +252,12 @@ void main()
 	IRQ_enable(IRQ_EVT_RINT1);		// Enables the event
 	IRQ_globalEnable();				// Globally enables interrupts
 
+
+	DSK6713_LED_toggle(3);	// toggle LED here for diagnostics (init finished)
 	while(1)						// main loop
 	{
-		if ((state==2)&&(delay_est_done==0)){  // TIME TO COMPUTE DELAY ESTIMATES
+
+		if ((state==STATE_ESTIMATE)&&(delay_est_done==0)){  // TIME TO COMPUTE DELAY ESTIMATES
 
 			DSK6713_LED_toggle(1);	// toggle LED here for diagnostics
 
@@ -278,7 +287,7 @@ void main()
 			pcf = atan2(zq,zi)*(2*INVPI); // assumes wc = pi/2
 			fde = (float) cde + pcf;
 
-			// compute actual clock offset
+			// compute actual clock offset//////////////////////////////////////////////////////////////////////////////
 			// the value computed here is always non-negative and
 			// represents the number of samples the master clock is ahead of the slave clock
 			// (or the number of samples the slave clock is behind the master clock)
@@ -287,11 +296,8 @@ void main()
 			// to synchronize, we want slave clock ticks to appear at fde/2 + k*L for k=0,1,....
 			clockoffset = fde*0.5;
 
-			circularclockoffset = clockoffset;
-			///////////////////***************
-			//This adjusts the pink line (definitely comment out)
-			while (circularclockoffset>((float) L))
-				circularclockoffset = circularclockoffset - (float) L;
+			while (clockoffset>((float) L))
+				clockoffset = clockoffset - (float) L;
 
 			// testing/debugging
 			imax_save[save_index] = imax;
@@ -299,7 +305,7 @@ void main()
 			cde_save[save_index] = cde;
 			pcf_save[save_index] = pcf;
 			fde_save[save_index] = fde;
-			clockoffset_save[save_index] = circularclockoffset;
+			clockoffset_save[save_index] = clockoffset;
 
 			// ppm estimator (quick and dirty)
 			// actual formula is
@@ -309,32 +315,39 @@ void main()
 				ppm_estimate = (clockoffset_save[save_index]-clockoffset_save[save_index-1])*61.03515625; //
 			}
 
+			//*** I have to read from here
 			ppm_estimate_save[save_index] = ppm_estimate;
-
 			ppm_estimate = 6.124; // xxx temporary
-
 
 			// update save index
 			save_index++;
 			if (save_index>=SAVES)  // wrap
 				save_index = 0;
 
+
 			// copy appropriate fractionally shifted clock buffer to shifted clock buffer
 			one_over_beta = ((double) LL)/((double) LL - ppm_estimate/61.03515625); // approx 1+ppm_estimate/1E6
-			//////////////
-			adjustedclockoffset = clockoffset + ((double) 2*L)*one_over_beta;  // latency for first pulse is 2*L (xxx revisit)
-			///////////////////***************
-			//Wrapping is wrong in this case.
-						while (adjustedclockoffset>((double) L))
-							adjustedclockoffset = adjustedclockoffset - (double) L;
+
+			//Need to account for the possible 1-tick situation
+			adjustedclockoffset = clockoffset + ((double) 2*L)*one_over_beta;  // latency for first pulse is 2*L ********(xxx revisit)
+
+			///////////////Wrapping is wrong in this case.
+			//while (adjustedclockoffset>((double) L))
+			//	adjustedclockoffset = adjustedclockoffset - (double) L;
 
 			j = (short) adjustedclockoffset; // casting from float to short just truncates, e.g., 3.99 becomes 3
 			fractionalShift = adjustedclockoffset - (double) j; // fractionalShift >= 0 and < 1 tells us how much of a sample is left
 			k = (short) (fractionalShift * (double) FER + 0.5);  // this now rounds and givse results on 0,...,FER
+
+			//Maybe changing the offset here will work
+			while (adjustedclockoffset>((double) L))
+				adjustedclockoffset = adjustedclockoffset - (double) L;
+
 			if (k==FER) {  // we rounded up to the next whole sample
 				k = 0;
 				j++;
 			}
+
 			for (i=0;i<L;i++) {
 				ell = j+i;
 				while (ell>=L) {
@@ -362,6 +375,7 @@ void main()
 		}
 		else if (buffer_just_swapped==1) {
 			// this code computes the next buffer and attempts to corect for the frequency offset
+			DSK6713_LED_toggle(2);
 			buffer_just_swapped = 0;
 			// copy appropriate fractionally shifted clock buffer to shifted clock buffer
 			adjustedclockoffset = adjustedclockoffset + ((double) L)*one_over_beta;  // adjust latency of next pulse
@@ -381,11 +395,12 @@ void main()
 				else {
 					clockbuf_shifted[0][ell] = allMyDelayedWaveforms[k][i];  // write other buffer
 				}
-
+				DSK6713_LED_toggle(2);
 			}
 		} // if ((state==2)&&(delay_est_done==0))
 	}  // while(1)
 }  // void main
+
 
 interrupt void serialPortRcvISR()
 {

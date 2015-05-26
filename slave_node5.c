@@ -317,8 +317,9 @@ void main()
 			}
 
 			//*** I have to read from here
-			ppm_estimate = 6.198883; // xxx temporary
 			ppm_estimate_save[save_index] = ppm_estimate;
+			ppm_estimate = 6.198883; // xxx temporary
+
 
 			// update save index
 			save_index++;

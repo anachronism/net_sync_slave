@@ -311,13 +311,16 @@ void main()
 			// actual formula is
 			// (clockoffset_save[save_index]-clockoffset_save[save_index-1])/(LL)*1E6
 			// xxx this will not work if clock offset wraps
+
+			//ppm_estimate = 6.176; // xxx temporary
 			if (save_index>=1) {
 				ppm_estimate = (clockoffset_save[save_index]-clockoffset_save[save_index-1])*61.03515625; //
 			}
+//			else
+//				ppm_estimate = 6.176; // xxx temporary
 
-			//*** I have to read from here
 			ppm_estimate_save[save_index] = ppm_estimate;
-			ppm_estimate = 6.124; // xxx temporary
+			ppm_estimate = 6.176; // xxx temporary
 
 			// update save index
 			save_index++;
@@ -329,7 +332,10 @@ void main()
 			one_over_beta = ((double) LL)/((double) LL - ppm_estimate/61.03515625); // approx 1+ppm_estimate/1E6
 
 			//Need to account for the possible 1-tick situation
-			adjustedclockoffset = clockoffset + ((double) 2*L)*one_over_beta;  // latency for first pulse is 2*L ********(xxx revisit)
+			if(clockoffset < (L - N))
+				adjustedclockoffset = clockoffset + ((double) L) * one_over_beta;
+			else //if (clockoffset < 2L)
+				adjustedclockoffset = clockoffset + ((double) 2*L)*one_over_beta;  // latency for first pulse is 2*L ********(xxx revisit)
 
 			///////////////Wrapping is wrong in this case.
 			//while (adjustedclockoffset>((double) L))
@@ -340,8 +346,8 @@ void main()
 			k = (short) (fractionalShift * (double) FER + 0.5);  // this now rounds and givse results on 0,...,FER
 
 			//Maybe changing the offset here will work
-			while (adjustedclockoffset>((double) L))
-				adjustedclockoffset = adjustedclockoffset - (double) L;
+			//while (adjustedclockoffset>((double) L))
+			//	adjustedclockoffset = adjustedclockoffset - (double) L;
 
 			if (k==FER) {  // we rounded up to the next whole sample
 				k = 0;
@@ -497,6 +503,8 @@ interrupt void serialPortRcvISR()
 		}
 		temp.channel[1] = clockbuf_shifted[current_clockbuf][vclock_counter];  // slave *shifted* clock signal (always played)
 //		temp.channel[1] = clockbuf[vclock_counter];  // slave *unshifted* clock signal (for debug)
+
+		//**Possible error
 		temp.channel[0] = sincpulsebuf[sincpulsebuf_counter];  // this initiates the sinc pulse exchange with the master
 	}
 

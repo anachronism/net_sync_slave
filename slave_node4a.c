@@ -68,71 +68,99 @@
 #include "dsk6713_aic23.h"
 #include "dsk6713_led.h"
 
+
+
 // ------------------------------------------
 // start of variables
 // ------------------------------------------
-float buf[M];       // search buffer
+ //The following must be volatile
+ 	// max_samp state zc zs buf zz max_recbuf recbuf_start_clock recbufindex bufindex recbuf delay_est_done
+ 	//vclock_counter swap_pending buffer_just_swapped current_clockbuf sincpulsebuf_counter
+
+volatile float buf[M];       // search buffer
 float mfc[M];		// in-phase correlation buffer
 float mfs[M];       // quadrature correlation buffer
-float corr_max, corr_max_s, corr_max_c; // correlation variables
-float corr_c[2*M];
-float corr_s[2*M];
-float s[2*M];
-short corr_max_lag;
-short bufindex = 0;
+volatile float recbuf[2*N+2*M]; // recording buffer
+
+volatile short bufindex = 0;
+
 short i,j,ell,imax,k;
-float zc, zs, z, zi, zq, zmax, zz;
+float z, zi, zq, zmax;
 double t,x,y;
 double fractionalShift = 0.0;
 short wait_count = 0;
+
 short sincpulsebuf[LL];  // sinc pulse buffer (left channel)
 short clockbuf[L];  // clock buffer (right channel)
+
+volatile short current_clockbuf = 0;  // selects which clock buffer to play
+//volatile short recbuf[2*N+2*M]; // recording buffer
+//volatile float recbuf[2*N+2*M]; // recording buffer
+////////////////////////////////////////////////////////////
 short clockbuf_shifted[2][L];  // double clock buffer (right channel)
-short current_clockbuf = 0;  // selects which clock buffer to play
-float recbuf[2*N+2*M]; // recording buffer
+
 float si[2*N+1];  // in-phase sinc pulse
 float sq[2*N+1];  // quadrature sinc pulse
-short recbufindex = 0;
-short max_recbuf = 0;
+
+volatile short recbufindex = 0;
+volatile short max_recbuf = 0;
 short playback_scale = 1;
-short state = -1;  // start in state -1 to let codec settle
-short vclock_counter = 0; // virtual clock counter
-int sincpulsebuf_counter = 0;  // sinc pulse buffer counter
-short recbuf_start_clock = 0; // virtual clock counter for first sample in recording buffer
+
+//volatile short state = -1;  // start in state -1 to let codec settle
+volatile int state = -1;
+volatile short vclock_counter = 0; // virtual clock counter
+volatile int sincpulsebuf_counter = 0;  // sinc pulse buffer counter
+volatile short recbuf_start_clock = 0; // virtual clock counter for first sample in recording buffer
 char r = 0;
-char swap_pending;  // flag for buffer swap pending
-char buffer_just_swapped = 0; // flag to tell main code that the buffer was just swapped
-short max_samp = 0;
-short cde = 0;			// coarse delay estimate (integer)
-float pcf = 0.0;		// phase correction factor
-float fde = 0.0;		// fine delay estimate
+
+volatile char swap_pending;  // flag for buffer swap pending
+volatile char buffer_just_swapped = 0; // flag to tell main code that the buffer was just swapped
+volatile short max_samp = 0;
+
+		// phase correction factor
+	// coarse delay estimate (integer)
+		// fine delay estimate
+
 short recbuf_start_clock_save[SAVES];
 short imax_save[SAVES];
-short cde_save[SAVES];     // save fine delay estimates for testing/debugging
-float fde_save[SAVES];     // save fine delay estimates for testing/debugging
+short cde = 0;
+short cde_save[SAVES];
+float fde = 0.0;// save fine delay estimates for testing/debugging
+float fde_save[SAVES];
+float pcf = 0.0;// save fine delay estimates for testing/debugging
 float pcf_save[SAVES];     // save fine delay estimates for testing/debugging
-float ppm_estimate_save[SAVES];
+
 float clockoffset;
-float circularclockoffset;     //debugs, helps find ppm by having a circular clock offset.
 float clockoffset_save[SAVES]; // save clock offset estimates for testing/debugging
+
 double ppm_estimate = 0.0;
+float ppm_estimate_save[SAVES];
+
 short save_index = 0;
 short buffer_swap_index = L;  // initialize to L to prevent swapping until new buffer is ready
 double one_over_beta;
 double adjustedclockoffset;
-char delay_est_done = 0;  // flag to tell ISR when delay estimates have been calculated
+volatile char delay_est_done = 0;  // flag to tell ISR when delay estimates have been calculated
 DSK6713_AIC23_CodecHandle hCodec;							// Codec handle
 DSK6713_AIC23_Config config = DSK6713_AIC23_DEFAULTCONFIG;  // Codec configuration with default settings
+////
 
 //Debug PPM estimate
 int placeholder = 0;
+short saveHasCycled = 0;
 
+//volatile float recbuf[2*N+2*M]; // recording buffer
 // lookup table of shifted modulated sinc pulses (xxx temporary (wasteful))
+
+///I think it may have to do with this pragma
 #pragma DATA_SECTION(allMyDelayedWaveforms,".mydata")
 far short allMyDelayedWaveforms[FER][L];
+//short allMyDelayedWaveforms[FER][L];
+
 // ------------------------------------------
 // end of variables
 // ------------------------------------------
+
 
 double sin(double);
 double cos(double);
@@ -221,11 +249,12 @@ void main(){
 	j = 0;
 	for (i=-N;i<=N;i++){
 		x = i*BW;
-		if (i!=0) {
+		if (i != 0) {
 			t = i*CBW;
 			si[j] = (float) (cos(2*PI*t)*sin(PI*x)/(PI*x));
 			sq[j] = (float) (sin(2*PI*t)*sin(PI*x)/(PI*x));
 		}
+
 		else {
 			si[j] = 1.0;
 			sq[j] = 0.0;
@@ -258,9 +287,7 @@ void main(){
 	DSK6713_LED_toggle(3);	// toggle LED here for diagnostics (init finished)
 	while(1)						// main loop
 	{
-
-		if ((state==STATE_ESTIMATE)&&(delay_est_done==0)){  // TIME TO COMPUTE DELAY ESTIMATES
-			//
+		if ((state==STATE_ESTIMATE)&&(delay_est_done==0)){  // TIME TO COMPUTE DELAY ESTIMATES			//
 			DSK6713_LED_toggle(1);	// toggle LED here for diagnostics
 
 			// compute coarse delay estimate
@@ -276,16 +303,29 @@ void main(){
 					imax = i;       // store index of maximum
 				}
 			}
+
+
 			cde = recbuf_start_clock + imax + N;  // coarse delay estimate (DRB: +N here because si is already shifted by N)
 			// cde  is the number of samples elapsed since we launched the S->M sinc pulse
 
 		    // compute fine delay estimate
 			zi = 0.0;  // in phase
 			zq = 0.0;  // quadrature
+
 			for (j=0;j<(2*N+1);j++) {
+
 				zi+= si[j]*recbuf[imax+j];  // correlation at lag imax
 				zq+= sq[j]*recbuf[imax+j];  // correlation at lag imax
+				///////
+				//debug
+				if(isnan(zi) || isnan(zq)){
+					placeholder = j;
+				}
 			}
+
+
+
+			////OCASIONALLY NaN
 			pcf = atan2(zq,zi)*(2*INVPI); // assumes wc = pi/2
 			fde = (float) cde + pcf;
 
@@ -298,8 +338,8 @@ void main(){
 			// to synchronize, we want slave clock ticks to appear at fde/2 + k*L for k=0,1,....
 			clockoffset = fde*0.5;
 
-			while (clockoffset>((float) L))
-				clockoffset = clockoffset - (float) L;
+			//while (clockoffset>((float) L))
+			//	clockoffset = clockoffset - (float) L;
 
 			// testing/debugging
 			imax_save[save_index] = imax;
@@ -315,49 +355,54 @@ void main(){
 			// xxx this will not work if clock offset wraps
 
 
-			//Something here breaks the buffer replacement
-			ppm_estimate = 6.176;
+			//backup ppm value
+			//ppm_estimate = 6.176;
+
+			//Do linear regression on this
 			if (save_index>=1) {
 				ppm_estimate = (clockoffset_save[save_index]-clockoffset_save[save_index-1])*61.03515625; //
 			}
-			//else
-			//	ppm_estimate = 6.176; // xxx temporary
+
 			placeholder = ppm_estimate;
 
-			if(isnan(ppm_estimate) || ppm_estimate == 0 ){
+			//If ppm_estimate is a value that it shouldn't be, break.
+			if(!isfinite(ppm_estimate)){
 				placeholder = 1;
 				ppm_estimate = 6.176;
 			}
 
+			//save ppm value
 			ppm_estimate_save[save_index] = ppm_estimate;
-			ppm_estimate = 6.176; // xxx temporary
+			//ppm_estimate = 6.176; // xxx temporary
 
 			// update save index
 			save_index++;
-			if (save_index>=SAVES)  // wrap
+			//cycle save index
+			if (save_index>=SAVES){
 				save_index = 0;
+				saveHasCycled = 1;
+			}
 
 
 			// copy appropriate fractionally shifted clock buffer to shifted clock buffer
 			one_over_beta = ((double) LL)/((double) LL - ppm_estimate/61.03515625); // approx 1+ppm_estimate/1E6
 
-			//Need to account for the possible 1-tick situation
-			if(clockoffset < (L - N))
+			///////////////Need to account for the possible 1-tick situation
+
+			if(clockoffset < L)
 				adjustedclockoffset = clockoffset + ((double) L) * one_over_beta;
 			else //if (clockoffset < 2L)
 				adjustedclockoffset = clockoffset + ((double) 2*L)*one_over_beta;  // latency for first pulse is 2*L ********(xxx revisit)
 
-			///////////////Wrapping is wrong in this case.
 			//while (adjustedclockoffset>((double) L))
 			//	adjustedclockoffset = adjustedclockoffset - (double) L;
+			////////////
+			//k and j may have the problem
 
 			j = (short) adjustedclockoffset; // casting from float to short just truncates, e.g., 3.99 becomes 3
 			fractionalShift = adjustedclockoffset - (double) j; // fractionalShift >= 0 and < 1 tells us how much of a sample is left
 			k = (short) (fractionalShift * (double) FER + 0.5);  // this now rounds and givse results on 0,...,FER
 
-			//Maybe changing the offset here will work
-			//while (adjustedclockoffset>((double) L))
-			//	adjustedclockoffset = adjustedclockoffset - (double) L;
 
 			if (k==FER) {  // we rounded up to the next whole sample
 				k = 0;
@@ -366,18 +411,17 @@ void main(){
 
 			for (i=0;i<L;i++) {
 				ell = j+i;
-				while (ell>=L) {
+				///
+				while (ell>=L)
 					ell = ell-L;
-				}
+
 				if (current_clockbuf==0) {
 					clockbuf_shifted[1][ell] = allMyDelayedWaveforms[k][i];  // write other buffer
 				}
 				else {
 					clockbuf_shifted[0][ell] = allMyDelayedWaveforms[k][i];  // write other buffer
 				}
-
 			}
-
 			// when can we swap buffers?
 			buffer_swap_index = j+L/2;  // midpoint of the silent part (I think)
 			while (buffer_swap_index>=L)
@@ -387,16 +431,22 @@ void main(){
 			delay_est_done = 1;
 
 			DSK6713_LED_toggle(1);	// toggle LED here for diagnostics
-
-		}
+	}
 		else if (buffer_just_swapped==1) {
 			// this code computes the next buffer and attempts to corect for the frequency offset
 			DSK6713_LED_toggle(2);
 			buffer_just_swapped = 0;
 			// copy appropriate fractionally shifted clock buffer to shifted clock buffer
-			adjustedclockoffset = adjustedclockoffset + ((double) L)*one_over_beta;  // adjust latency of next pulse
+
+			///////////////////
+			//if(clockoffset < L)
+				adjustedclockoffset = clockoffset + ((double) L) * one_over_beta;
+			//else //if (clockoffset < 2L)
+			//	adjustedclockoffset = clockoffset + ((double)2 * L)*one_over_beta;  // latency for first pulse is 2*L ********(xxx revisit)
+
 			while (adjustedclockoffset>((double) L))
 				adjustedclockoffset = adjustedclockoffset - (double) L;
+
 			j = (short) adjustedclockoffset; // casting from float to short just truncates, e.g., 3.99 becomes 3
 			fractionalShift = adjustedclockoffset - (double) j; // fractionalShift >= 0 and < 1 tells us how much of a sample is left
 			k = (short) (fractionalShift * (double) FER);  // this also truncates and should give result on 0,...,FER-1
@@ -413,6 +463,11 @@ void main(){
 				}
 				DSK6713_LED_toggle(2);
 			}
+
+			////Maybe changing the offset here will work
+			//while (adjustedclockoffset>((double) L))
+			//	adjustedclockoffset = adjustedclockoffset - (double) L;
+
 		} // if ((state==2)&&(delay_est_done==0))
 	}  // while(1)
 }  // void main
@@ -423,7 +478,7 @@ interrupt void serialPortRcvISR()
 	union {Uint32 combo; short channel[2];} temp;
 	short ii=0;
 	short jj=0;
-
+	float zc, zs, zz;
 	temp.combo = MCBSP_read(DSK6713_AIC23_DATAHANDLE);
 	// Note that right channel is in temp.channel[0]
 	// Note that left channel is in temp.channel[1]
@@ -475,6 +530,8 @@ interrupt void serialPortRcvISR()
 		// put sample in recording buffer
 		recbuf[recbufindex] = (float) temp.channel[0];  // right channel
 		recbufindex++;
+
+
 		if (recbufindex>=(2*N+2*M)) {
 			state = 2;  		// buffer is full
 			delay_est_done = 0; // clear flag
@@ -511,8 +568,9 @@ interrupt void serialPortRcvISR()
 			else
 				current_clockbuf = 0;
 		}
+		///////////////////////////////////
 		temp.channel[1] = clockbuf_shifted[current_clockbuf][vclock_counter];  // slave *shifted* clock signal (always played)
-//		temp.channel[1] = clockbuf[vclock_counter];  // slave *unshifted* clock signal (for debug)
+		//temp.channel[1] = clockbuf[vclock_counter];  // slave *unshifted* clock signal (for debug)
 
 		//**Possible error
 		temp.channel[0] = sincpulsebuf[sincpulsebuf_counter];  // this initiates the sinc pulse exchange with the master
@@ -536,5 +594,7 @@ interrupt void serialPortRcvISR()
 	}
 
 }
+
+
 
 

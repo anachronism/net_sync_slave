@@ -55,4 +55,6 @@ SECTIONS
     .c6xabi.exidx  >  IRAM
     .c6xabi.extab  >  IRAM
     .mydata		   >  EMIFCE0
+    .mydata2	   >  EMIFCE1
+    .mydata3	   >  EMIFCE2
 }
